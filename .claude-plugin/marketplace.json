@@ -1,0 +1,5 @@
+{
+  "name": "kurisu-limits",
+  "owner": { "name": "lannettanastemi" },
+  "plugins": [{ "name": "kurisu-limits", "source": "./" }]
+}

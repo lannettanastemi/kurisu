@@ -1,0 +1,10 @@
+{
+  "name": "kurisu-limits",
+  "version": "0.1.0",
+  "description": "Курису Макисе в панели рядом с чатом: прыгает, пьёт кофе и следит за лимитами Claude",
+  "types": "./types/index.d.ts",
+  "author": {
+    "name": "lannettanastemi"
+  },
+  "license": "MIT"
+}
