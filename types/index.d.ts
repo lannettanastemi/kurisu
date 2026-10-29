@@ -10,7 +10,7 @@ declare module 'claude-code' {
   interface PluginState {
     'kurisu-limits': {
       usage: Shaped<Usage>
-      isWorking: boolean
+      isHidden: boolean
       nickname: number
     }
   }

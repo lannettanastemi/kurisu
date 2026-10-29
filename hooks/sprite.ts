@@ -278,7 +278,7 @@ const MOTION: Record<Mood, { name: string; seconds: number; height: number }> = 
   shy: { name: 'sway', seconds: 1.8, height: 0 },
 }
 
-export function svg(mood: Mood, scale = 5): string {
+export function svg(mood: Mood, scale = 5, crop = HEIGHT): string {
   const pixels = frame(mood)
   const closed = frame(mood, true)
   const motion = MOTION[mood]
@@ -289,7 +289,7 @@ export function svg(mood: Mood, scale = 5): string {
   const zzz = mood === 'out'
     ? '<text class="z" x="29" y="8" font-size="5" font-family="monospace" fill="#9a8fc9">z</text><text class="z z2" x="32" y="4" font-size="4" font-family="monospace" fill="#9a8fc9">z</text>'
     : ''
-  const h = HEIGHT + 6
+  const h = crop === HEIGHT ? HEIGHT + 6 : crop + 4
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 -4 ${WIDTH} ${h}" width="${WIDTH * scale}" height="${h * scale}" shape-rendering="crispEdges">
 <style>
 .all{animation:${motion.name} ${motion.seconds}s ease-in-out infinite;transform-origin:50% 100%;transform-box:fill-box}
@@ -308,20 +308,20 @@ export function svg(mood: Mood, scale = 5): string {
 @keyframes blink{0%,93%{opacity:0}94%,98%{opacity:1}99%,100%{opacity:0}}
 @keyframes steam{0%{opacity:0;transform:translateY(1px)}30%{opacity:.9}100%{opacity:0;transform:translateY(-4px)}}
 </style>
-<ellipse cx="${WIDTH / 2}" cy="${HEIGHT - 1.2}" rx="9" ry="1.3" fill="#000" opacity=".18"/>
+${crop === HEIGHT ? `<ellipse cx="${WIDTH / 2}" cy="${HEIGHT - 1.2}" rx="9" ry="1.3" fill="#000" opacity=".18"/>` : ''}
 <g class="all"><g>${rects(pixels, WAIST, HEIGHT)}</g><g class="upper">${rects(pixels, 0, WAIST)}<g class="lids">${eyeRects(closed)}</g></g>${steam}${zzz}</g>
 </svg>`
 }
 
 const DEFAULT_COLOR = 0x01000000
 
-export function terminalSize() {
-  return { columns: WIDTH, rows: Math.ceil((HEIGHT + 2) / 2) }
+export function terminalSize(crop = HEIGHT) {
+  return { columns: WIDTH, rows: Math.ceil((crop + 2) / 2) }
 }
 
-export function cells(mood: Mood, tick: number): string {
+export function cells(mood: Mood, tick: number, crop = HEIGHT): string {
   const pixels = frame(mood, tick % 32 === 31)
-  const { columns, rows: lines } = terminalSize()
+  const { columns, rows: lines } = terminalSize(crop)
   const hop = mood === 'working' ? [0, 1, 2, 2, 1, 0][tick % 6] ?? 0 : 0
   const breathe = (mood === 'calm' || mood === 'out') && Math.floor(tick / 9) % 2 === 1 ? 1 : 0
   const jitter = mood === 'panic' ? tick % 2 : 0

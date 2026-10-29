@@ -1,7 +1,7 @@
 {
   "name": "kurisu-limits",
-  "version": "0.1.0",
-  "description": "Курису Макисе в панели рядом с чатом: прыгает, пьёт кофе и следит за лимитами Claude",
+  "version": "0.2.0",
+  "description": "Курису Макисе и пиксельный Клод над полем ввода: лимиты Claude, время сброса, анимации",
   "types": "./types/index.d.ts",
   "author": {
     "name": "lannettanastemi"

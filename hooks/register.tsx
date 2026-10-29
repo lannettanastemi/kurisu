@@ -2,15 +2,16 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, Timer } from 'claude-code'
 
 import type { Limit, Usage } from '../types'
+import { clawdCells, clawdSvg, clawdTerminalRows, type ClawdMode } from './clawd'
 import { cells, svg, terminalSize, type Mood } from './sprite'
 
-const PANE = 'kurisu'
-const TITLE = 'Курису · лимиты'
+const BUST = 46
+const HEAD = 26
 
 const usage = atom({ plugin: 'kurisu-limits', key: 'usage' } as const, { limits: [] }, {
   shape: 'usage-1',
 })
-const isWorking = atom({ plugin: 'kurisu-limits', key: 'isWorking' } as const, false)
+const isHidden = atom({ plugin: 'kurisu-limits', key: 'isHidden' } as const, false)
 const nickname = atom({ plugin: 'kurisu-limits', key: 'nickname' } as const, 0)
 
 const LABELS: Record<string, string> = {
@@ -45,6 +46,14 @@ function moodOf(data: Usage, working: boolean, shy: boolean): Mood {
   return 'calm'
 }
 
+function clawdModeOf(data: Usage, working: boolean): ClawdMode {
+  const top = Math.max(0, ...data.limits.map(limit => limit.percentUsed))
+  if (top >= 100) return 'out'
+  if (top >= 85) return 'panic'
+  if (working) return 'working'
+  return 'idle'
+}
+
 function barColor(percent: number) {
   if (percent >= 85) return '#e5484d'
   if (percent >= 60) return '#f5a524'
@@ -56,16 +65,21 @@ function bar(percent: number, width: number) {
   return { filled: '█'.repeat(filled), empty: '░'.repeat(width - filled) }
 }
 
-function untilReset(resetsAt: string | undefined, now: number) {
+const pad = (n: number) => String(n).padStart(2, '0')
+
+function resetText(resetsAt: string | undefined, now: number) {
   if (!resetsAt) return ''
-  const minutes = Math.max(0, Math.round((Date.parse(resetsAt) - now) / 60000))
-  if (Number.isNaN(minutes)) return ''
+  const at = Date.parse(resetsAt)
+  if (Number.isNaN(at)) return ''
+  const minutes = Math.max(0, Math.round((at - now) / 60000))
   const days = Math.floor(minutes / 1440)
   const hours = Math.floor((minutes % 1440) / 60)
   const rest = minutes % 60
-  if (days > 0) return `сброс через ${days} д ${hours} ч`
-  if (hours > 0) return `сброс через ${hours} ч ${rest} мин`
-  return `сброс через ${rest} мин`
+  const left = days > 0 ? `${days} д ${hours} ч` : hours > 0 ? `${hours} ч ${rest} мин` : `${rest} мин`
+  const date = new Date(at)
+  const clock = `${pad(date.getHours())}:${pad(date.getMinutes())}`
+  const day = days > 0 ? ` ${pad(date.getDate())}.${pad(date.getMonth() + 1)}` : ''
+  return `сброс в ${clock}${day} · через ${left}`
 }
 
 function toUsage(limits: Limit[], contextPercent?: number, costUsd?: number): Usage {
@@ -97,6 +111,11 @@ async function store($: EngineInterface, next: Usage) {
   lastWarned = level
 }
 
+async function refresh($: EngineInterface) {
+  const now = await $.session.usage()
+  await store($, toUsage(now.rateLimits, now.context.percent, now.cost?.usd))
+}
+
 export const register: Register = on => {
   let tick = 0
   let timer: Timer | undefined
@@ -105,21 +124,23 @@ export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'kurisu',
-      description: 'Открыть панель Курису с лимитами Claude',
+      description: 'Показать или спрятать Курису с лимитами над полем ввода',
     })
-    const now = await $.session.usage()
-    await store($, toUsage(now.rateLimits, now.context.percent, now.cost?.usd))
-    $.clock.every(60000, () => $.ui.invalidate('ui.render'))
-    void $.ui.open({ id: PANE, title: TITLE })
+    await refresh($)
+    $.clock.every(60000, () => {
+      void refresh($)
+      $.ui.invalidate('ui.render')
+    })
     $.ui.toast('El Psy Kongroo.')
 
     return next(e)
   })
 
   on('command.run', { command: 'kurisu' }, async $ => {
-    await $.ui.open({ id: PANE, title: TITLE })
+    const wasHidden = await read($, isHidden)
+    await update($, isHidden, () => !wasHidden)
 
-    return { text: 'Курису на месте.' }
+    return { text: wasHidden ? 'Курису на месте.' : 'Курису ушла пить кофе. /kurisu — позвать обратно.' }
   })
 
   on('session.measure', async ($, e, next) => {
@@ -134,38 +155,44 @@ export const register: Register = on => {
       await update($, nickname, n => (n ?? 0) + 1)
       $.clock.after(8100, () => $.ui.invalidate('ui.render'))
     }
-    await update($, isWorking, () => true)
 
     return next(e)
   })
 
-  on('turn.complete', async ($, e, next) => {
-    await update($, isWorking, () => false)
+  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    if (e.props.hasSurvey || (await read($, isHidden))) return next(e)
 
-    return next(e)
-  })
-
-  on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const data = await read($, usage)
-    const working = await read($, isWorking)
     await read($, nickname)
     const now = await $.clock.now()
-    const mood = moodOf(data, working, now < shyUntil)
+    const mood = moodOf(data, e.props.isWorking, now < shyUntil)
     const lines = LINES[mood]
-    const line = lines[Math.floor(now / 60000) % lines.length]
-    const width = Math.max(8, Math.min(24, (e.props.bodyColumns ?? 30) - 16))
+    const line = lines[Math.floor(now / 60000) % lines.length] ?? ''
+    const columns = e.props.bodyColumns
+    const width = Math.max(6, Math.min(20, columns - 58))
 
+    const clawdMode = clawdModeOf(data, e.props.isWorking)
     const surface = e.surface
+    const requestId = e.requestId
     let sprite
+    let clawd
     if (surface === 'terminal') {
-      const { Raster } = $.ui.resolve({ ...e, surface })
-      const size = terminalSize()
-      sprite = <Raster key="sprite" columns={size.columns} rows={size.rows} cells={cells(mood, tick)} />
       timer?.cancel()
+      timer = undefined
+      const size = terminalSize(HEAD)
+      const hasKurisu = e.props.maxRows >= size.rows && columns >= 90
+      const laneColumns = Math.max(24, Math.min(90, columns - (hasKurisu ? size.columns + 4 : 2)))
+      const { Raster } = $.ui.resolve({ ...e, surface })
+      if (hasKurisu) {
+        sprite = <Raster key="sprite" columns={size.columns} rows={size.rows} cells={cells(mood, tick, HEAD)} />
+      }
+      clawd = <Raster key="clawd" columns={laneColumns} rows={clawdTerminalRows()} cells={clawdCells(clawdMode, tick, laneColumns)} />
       timer = $.clock.every(140, () => {
         tick += 1
-        void $.ui.blit({ requestId: PANE, key: 'sprite', cells: cells(mood, tick) }).then(result => {
-          if ('deny' in result && result.deny) {
+        const blits = [$.ui.blit({ requestId, key: 'clawd', cells: clawdCells(clawdMode, tick, laneColumns) })]
+        if (hasKurisu) blits.push($.ui.blit({ requestId, key: 'sprite', cells: cells(mood, tick, HEAD) }))
+        void Promise.all(blits).then(results => {
+          if (results.some(result => 'deny' in result && result.deny)) {
             timer?.cancel()
             timer = undefined
           }
@@ -173,47 +200,40 @@ export const register: Register = on => {
       })
     } else {
       const { Svg } = $.ui.resolve({ ...e, surface })
-      sprite = <Svg source={svg(mood)} alt={`Курису Макисе: ${line}`} isInteractive />
+      sprite = <Svg source={svg(mood, 2, BUST)} alt={`Курису Макисе: ${line}`} width={80} height={100} isInteractive />
+      clawd = <Svg source={clawdSvg(clawdMode)} alt="Пиксельный Клод занимается своими делами" isInteractive />
     }
 
     const { Box, Text } = $.ui.resolve(e)
-    const rows = data.limits.length === 0
-      ? [<Text dimColor>Данных о лимитах пока нет: они появятся после первого ответа (и только на подписке).</Text>]
+    const limitRows = data.limits.length === 0
+      ? [<Text dimColor>Лимиты появятся после следующего ответа Claude (только на подписке).</Text>]
       : data.limits.map(limit => {
           const parts = bar(limit.percentUsed, width)
           return (
-            <Box flexDirection="column">
-              <Text>
-                <Text bold>{(LABELS[limit.kind] ?? limit.kind).padEnd(8)}</Text>
-                <Text color={barColor(limit.percentUsed)}>{parts.filled}</Text>
-                <Text dimColor>{parts.empty}</Text>
-                <Text> {Math.round(limit.percentUsed)}%</Text>
-              </Text>
-              <Text dimColor>{'        '}{untilReset(limit.resetsAt, now)}</Text>
-            </Box>
+            <Text mono>
+              <Text bold>{(LABELS[limit.kind] ?? limit.kind).padEnd(9)}</Text>
+              <Text color={barColor(limit.percentUsed)}>{parts.filled}</Text>
+              <Text dimColor>{parts.empty}</Text>
+              <Text bold>{` ${String(Math.round(limit.percentUsed)).padStart(3)}%`}</Text>
+              <Text dimColor>{`  ${resetText(limit.resetsAt, now)}`}</Text>
+            </Text>
           )
         })
 
     const context = data.contextPercent
+    const extras = [
+      context !== undefined ? `контекст ${context}%` : '',
+      data.costUsd !== undefined && data.costUsd > 0 ? `сессия $${data.costUsd.toFixed(2)}` : '',
+    ].filter(Boolean)
+
     return (
-      <Box flexDirection="column" alignItems="center" gap={1}>
+      <Box flexDirection="row" alignItems="center" gap={2}>
         {sprite}
-        <Box borderStyle="round" borderColor="#b8323a" paddingX={1}>
-          <Text italic>«{line}»</Text>
-        </Box>
-        <Box flexDirection="column" alignSelf="flex-start">
-          {rows}
-          {context !== undefined && (
-            <Text>
-              <Text bold>{'Контекст'.padEnd(8)}</Text>
-              <Text color={barColor(context)}>{bar(context, width).filled}</Text>
-              <Text dimColor>{bar(context, width).empty}</Text>
-              <Text> {context}%</Text>
-            </Text>
-          )}
-          {data.costUsd !== undefined && data.costUsd > 0 && (
-            <Text dimColor>Сессия стоит ${data.costUsd.toFixed(2)}</Text>
-          )}
+        <Box flexDirection="column" flexGrow={1} flexShrink={1}>
+          <Text italic color="#e2665a" wrap="truncate-end">«{line}»</Text>
+          {limitRows}
+          {extras.length > 0 && <Text dimColor>{extras.join(' · ')}</Text>}
+          {clawd}
         </Box>
       </Box>
     )
